@@ -1,0 +1,5 @@
+.env
+kanban-ui/.env
+backend/.env
+node_modules/
+vendor/
