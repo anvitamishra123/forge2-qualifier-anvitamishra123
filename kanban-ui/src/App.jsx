@@ -1,115 +1,456 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import axios from "axios";
+import "./App.css";
 
-const COLUMNS = ["Backlog", "In Progress", "Review", "Done"];
+const API_BASE =
+  import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/api";
 
-const INITIAL_CARDS = [
-  { id: 1, title: "Setup OpenClaw agent", col: "Done", priority: "high" },
-  { id: 2, title: "Setup Hermes brain", col: "Done", priority: "high" },
-  { id: 3, title: "Wire Slack channels", col: "In Progress", priority: "high" },
-  { id: 4, title: "Build Kanban UI", col: "In Progress", priority: "med" },
-  { id: 5, title: "Deploy live URL", col: "Backlog", priority: "med" },
-  { id: 6, title: "Submit qualifier", col: "Backlog", priority: "high" },
-];
+function App() {
+  const [boards, setBoards] = useState([]);
+  const [activeBoard, setActiveBoard] = useState(null);
+  const [tags, setTags] = useState([]);
+  const [members, setMembers] = useState([]);
 
-const PRIORITY_COLOR = { high: "#ff4d4d", med: "#ffa500", low: "#4caf50" };
+  const [newBoardName, setNewBoardName] = useState("");
+  const [newListName, setNewListName] = useState("");
+  const [loading, setLoading] = useState(false);
 
-export default function App() {
-  const [cards, setCards] = useState(INITIAL_CARDS);
-  const [newTitle, setNewTitle] = useState("");
-  const [newPriority, setNewPriority] = useState("med");
-  const [dragId, setDragId] = useState(null);
+  const api = axios.create({
+    baseURL: API_BASE,
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
 
-  const addCard = () => {
-    if (!newTitle.trim()) return;
-    setCards([...cards, { id: Date.now(), title: newTitle, col: "Backlog", priority: newPriority }]);
-    setNewTitle("");
+  const loadData = async () => {
+    try {
+      setLoading(true);
+
+      const [boardRes, tagRes, memberRes] = await Promise.all([
+        api.get("/boards"),
+        api.get("/tags"),
+        api.get("/members"),
+      ]);
+
+      const boardData = boardRes.data || [];
+
+      setBoards(boardData);
+      setTags(tagRes.data || []);
+      setMembers(memberRes.data || []);
+
+      if (boardData.length > 0) {
+        if (activeBoard) {
+          const updatedActiveBoard = boardData.find(
+            (board) => board.id === activeBoard.id
+          );
+          setActiveBoard(updatedActiveBoard || boardData[0]);
+        } else {
+          setActiveBoard(boardData[0]);
+        }
+      } else {
+        setActiveBoard(null);
+      }
+    } catch (error) {
+      console.error("API Error:", error);
+      alert(
+        "Backend API connect nahi ho pa raha. Please check karo php artisan serve running hai ya nahi."
+      );
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const deleteCard = (id) => setCards(cards.filter((c) => c.id !== id));
+  useEffect(() => {
+    loadData();
+  }, []);
 
-  const onDragStart = (id) => setDragId(id);
-  const onDrop = (col) => {
-    setCards(cards.map((c) => (c.id === dragId ? { ...c, col } : c)));
-    setDragId(null);
+  const createBoard = async () => {
+    if (!newBoardName.trim()) {
+      alert("Please board name enter karo.");
+      return;
+    }
+
+    await api.post("/boards", {
+      name: newBoardName,
+      description: "Forge 2 Kanban board",
+    });
+
+    setNewBoardName("");
+    await loadData();
   };
 
-  const doneCount = cards.filter((c) => c.col === "Done").length;
-  const heat = Math.round((doneCount / cards.length) * 100);
+  const createList = async () => {
+    if (!activeBoard) {
+      alert("Pehle board create/select karo.");
+      return;
+    }
+
+    if (!newListName.trim()) {
+      alert("Please list name enter karo.");
+      return;
+    }
+
+    await api.post(`/boards/${activeBoard.id}/lists`, {
+      name: newListName,
+      position: activeBoard.lists ? activeBoard.lists.length : 0,
+    });
+
+    setNewListName("");
+    await loadData();
+  };
+
+  const createCard = async (listId) => {
+    const title = prompt("Enter card title:");
+    if (!title) return;
+
+    const description = prompt("Enter card description:") || "";
+
+    await api.post(`/lists/${listId}/cards`, {
+      title,
+      description,
+      position: 0,
+      due_date: null,
+    });
+
+    await loadData();
+  };
+
+  const editCard = async (card) => {
+    const title = prompt("Update card title:", card.title);
+    if (!title) return;
+
+    const description =
+      prompt("Update card description:", card.description || "") || "";
+
+    await api.put(`/cards/${card.id}`, {
+      title,
+      description,
+      position: card.position || 0,
+      due_date: card.due_date,
+    });
+
+    await loadData();
+  };
+
+  const deleteCard = async (cardId) => {
+    const confirmDelete = confirm("Are you sure you want to delete this card?");
+    if (!confirmDelete) return;
+
+    await api.delete(`/cards/${cardId}`);
+    await loadData();
+  };
+
+  const moveCard = async (cardId, targetListId) => {
+    if (!targetListId) return;
+
+    await api.post(`/cards/${cardId}/move`, {
+      list_id: Number(targetListId),
+      position: 0,
+    });
+
+    await loadData();
+  };
+
+  const setDueDate = async (card) => {
+    const dueDate = prompt(
+      "Enter due date in YYYY-MM-DD format:",
+      card.due_date || ""
+    );
+
+    if (dueDate === null) return;
+
+    await api.put(`/cards/${card.id}`, {
+      title: card.title,
+      description: card.description || "",
+      position: card.position || 0,
+      due_date: dueDate || null,
+    });
+
+    await loadData();
+  };
+
+  const createTag = async () => {
+    const name = prompt("Enter tag name:");
+    if (!name) return;
+
+    const color = prompt("Enter tag color hex code:", "#3B82F6") || "#3B82F6";
+
+    await api.post("/tags", {
+      name,
+      color,
+    });
+
+    await loadData();
+  };
+
+  const assignTag = async (card) => {
+    if (tags.length === 0) {
+      alert("No tags found. Please create a tag first.");
+      return;
+    }
+
+    const tagList = tags.map((tag) => `${tag.id}: ${tag.name}`).join("\n");
+
+    const tagId = prompt(`Enter tag ID:\n${tagList}`);
+    if (!tagId) return;
+
+    const existingTagIds = card.tags ? card.tags.map((tag) => tag.id) : [];
+    const updatedTagIds = [...new Set([...existingTagIds, Number(tagId)])];
+
+    await api.post(`/cards/${card.id}/tags`, {
+      tag_ids: updatedTagIds,
+    });
+
+    await loadData();
+  };
+
+  const createMember = async () => {
+    const name = prompt("Enter member name:");
+    if (!name) return;
+
+    const email = prompt("Enter member email:");
+    if (!email) return;
+
+    await api.post("/members", {
+      name,
+      email,
+    });
+
+    await loadData();
+  };
+
+  const assignMember = async (card) => {
+    if (members.length === 0) {
+      alert("No members found. Please create a member first.");
+      return;
+    }
+
+    const memberList = members
+      .map((member) => `${member.id}: ${member.name}`)
+      .join("\n");
+
+    const memberId = prompt(`Enter member ID:\n${memberList}`);
+    if (!memberId) return;
+
+    const existingMemberIds = card.members
+      ? card.members.map((member) => member.id)
+      : [];
+
+    const updatedMemberIds = [
+      ...new Set([...existingMemberIds, Number(memberId)]),
+    ];
+
+    await api.post(`/cards/${card.id}/members`, {
+      member_ids: updatedMemberIds,
+    });
+
+    await loadData();
+  };
+
+  const isOverdue = (dueDate) => {
+    if (!dueDate) return false;
+
+    const today = new Date();
+    const due = new Date(dueDate);
+
+    today.setHours(0, 0, 0, 0);
+    due.setHours(0, 0, 0, 0);
+
+    return due < today;
+  };
 
   return (
-    <div style={{ fontFamily: "monospace", minHeight: "100vh", background: "#1a1a1a", color: "#f0f0f0", padding: "20px" }}>
-      {/* Header */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
-        <h1 style={{ margin: 0, color: "#ff6b00", fontSize: "2rem", letterSpacing: "4px" }}>⚒ FORGE BOARD</h1>
-        <div style={{ textAlign: "right" }}>
-          <div style={{ fontSize: "0.8rem", color: "#888" }}>HEAT GAUGE</div>
-          <div style={{ width: "200px", background: "#333", borderRadius: "4px", height: "12px", marginTop: "4px" }}>
-            <div style={{ width: `${heat}%`, background: "linear-gradient(90deg, #ff6b00, #ff0000)", height: "100%", borderRadius: "4px", transition: "width 0.5s" }} />
-          </div>
-          <div style={{ fontSize: "0.8rem", color: "#ff6b00", marginTop: "2px" }}>{heat}% shipped</div>
+    <div className="app">
+      <header className="topbar">
+        <div>
+          <h1>Forge 2 Kanban Board</h1>
+          <p>Laravel API + React UI + Slack Agent Workflow</p>
         </div>
-      </div>
 
-      {/* Add Card */}
-      <div style={{ display: "flex", gap: "8px", marginBottom: "20px" }}>
-        <input
-          value={newTitle}
-          onChange={(e) => setNewTitle(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && addCard()}
-          placeholder="New task..."
-          style={{ flex: 1, padding: "8px 12px", background: "#2a2a2a", border: "1px solid #444", color: "#f0f0f0", borderRadius: "4px", fontFamily: "monospace" }}
-        />
-        <select value={newPriority} onChange={(e) => setNewPriority(e.target.value)}
-          style={{ padding: "8px", background: "#2a2a2a", border: "1px solid #444", color: "#f0f0f0", borderRadius: "4px" }}>
-          <option value="high">🔴 High</option>
-          <option value="med">🟡 Med</option>
-          <option value="low">🟢 Low</option>
-        </select>
-        <button onClick={addCard}
-          style={{ padding: "8px 16px", background: "#ff6b00", color: "#fff", border: "none", borderRadius: "4px", cursor: "pointer", fontFamily: "monospace", fontWeight: "bold" }}>
-          + ADD
-        </button>
-      </div>
+        <button onClick={loadData}>Refresh</button>
+      </header>
 
-      {/* Stats */}
-      <div style={{ display: "flex", gap: "16px", marginBottom: "20px", fontSize: "0.8rem", color: "#888" }}>
-        <span>📋 Total: {cards.length}</span>
-        <span>✅ Shipped: {doneCount}</span>
-        <span>🔴 High Priority: {cards.filter(c => c.priority === "high" && c.col !== "Done").length} pending</span>
-      </div>
+      <section className="panel">
+        <h2>Boards</h2>
 
-      {/* Columns */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "12px" }}>
-        {COLUMNS.map((col) => (
-          <div key={col}
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={() => onDrop(col)}
-            style={{ background: "#242424", borderRadius: "8px", padding: "12px", minHeight: "400px", border: "1px solid #333" }}>
-            <div style={{ fontWeight: "bold", color: "#ff6b00", marginBottom: "12px", fontSize: "0.85rem", letterSpacing: "2px", borderBottom: "1px solid #333", paddingBottom: "8px" }}>
-              {col.toUpperCase()} ({cards.filter(c => c.col === col).length})
+        <div className="row">
+          <input
+            type="text"
+            placeholder="New board name"
+            value={newBoardName}
+            onChange={(e) => setNewBoardName(e.target.value)}
+          />
+          <button onClick={createBoard}>Create Board</button>
+        </div>
+
+        <div className="board-tabs">
+          {boards.map((board) => (
+            <button
+              key={board.id}
+              className={activeBoard?.id === board.id ? "active" : ""}
+              onClick={() => setActiveBoard(board)}
+            >
+              {board.name}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section className="panel">
+        <h2>Tags & Members</h2>
+
+        <div className="row">
+          <button onClick={createTag}>Create Tag</button>
+          <button onClick={createMember}>Create Member</button>
+        </div>
+
+        <div className="meta-grid">
+          <div>
+            <h3>Available Tags</h3>
+
+            {tags.length === 0 && <p>No tags available.</p>}
+
+            {tags.map((tag) => (
+              <span
+                key={tag.id}
+                className="tag"
+                style={{ backgroundColor: tag.color || "#3B82F6" }}
+              >
+                {tag.id}. {tag.name}
+              </span>
+            ))}
+          </div>
+
+          <div>
+            <h3>Available Members</h3>
+
+            {members.length === 0 && <p>No members available.</p>}
+
+            {members.map((member) => (
+              <span key={member.id} className="member">
+                {member.id}. {member.name}
+              </span>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {loading && <p className="loading">Loading...</p>}
+
+      {!activeBoard && !loading && (
+        <section className="empty">
+          <h2>No board found</h2>
+          <p>Please create your first board.</p>
+        </section>
+      )}
+
+      {activeBoard && (
+        <>
+          <section className="panel">
+            <h2>Active Board: {activeBoard.name}</h2>
+
+            <div className="row">
+              <input
+                type="text"
+                placeholder="New list name e.g. To Do"
+                value={newListName}
+                onChange={(e) => setNewListName(e.target.value)}
+              />
+              <button onClick={createList}>Add List</button>
             </div>
-            {cards.filter((c) => c.col === col).map((card) => (
-              <div key={card.id} draggable
-                onDragStart={() => onDragStart(card.id)}
-                style={{ background: "#2e2e2e", borderRadius: "6px", padding: "10px", marginBottom: "8px", borderLeft: `3px solid ${PRIORITY_COLOR[card.priority]}`, cursor: "grab", position: "relative" }}>
-                <div style={{ fontSize: "0.85rem", marginBottom: "6px" }}>{card.title}</div>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <span style={{ fontSize: "0.7rem", color: PRIORITY_COLOR[card.priority] }}>{card.priority.toUpperCase()}</span>
-                  <button onClick={() => deleteCard(card.id)}
-                    style={{ background: "none", border: "none", color: "#666", cursor: "pointer", fontSize: "0.75rem" }}>✕</button>
+          </section>
+
+          <main className="kanban">
+            {(activeBoard.lists || []).map((list) => (
+              <div className="list" key={list.id}>
+                <div className="list-header">
+                  <h3>{list.name}</h3>
+                  <button onClick={() => createCard(list.id)}>+ Card</button>
                 </div>
+
+                {(list.cards || []).length === 0 && (
+                  <p className="empty-list">No cards yet</p>
+                )}
+
+                {(list.cards || []).map((card) => (
+                  <div
+                    key={card.id}
+                    className={`card ${
+                      isOverdue(card.due_date) ? "overdue" : ""
+                    }`}
+                  >
+                    <h4>{card.title}</h4>
+                    <p>{card.description || "No description"}</p>
+
+                    <div className="card-tags">
+                      {(card.tags || []).map((tag) => (
+                        <span
+                          key={tag.id}
+                          className="tag"
+                          style={{ backgroundColor: tag.color || "#3B82F6" }}
+                        >
+                          {tag.name}
+                        </span>
+                      ))}
+                    </div>
+
+                    <div className="card-members">
+                      {(card.members || []).map((member) => (
+                        <span key={member.id} className="member">
+                          {member.name}
+                        </span>
+                      ))}
+                    </div>
+
+                    <p
+                      className={
+                        isOverdue(card.due_date)
+                          ? "due overdue-text"
+                          : "due"
+                      }
+                    >
+                      Due: {card.due_date || "Not set"}
+                      {isOverdue(card.due_date) && " ⚠ Overdue"}
+                    </p>
+
+                    <select
+                      defaultValue=""
+                      onChange={(e) => moveCard(card.id, e.target.value)}
+                    >
+                      <option value="">Move to...</option>
+
+                      {(activeBoard.lists || []).map((targetList) => (
+                        <option key={targetList.id} value={targetList.id}>
+                          {targetList.name}
+                        </option>
+                      ))}
+                    </select>
+
+                    <div className="card-actions">
+                      <button onClick={() => editCard(card)}>Edit</button>
+                      <button onClick={() => assignTag(card)}>Add Tag</button>
+                      <button onClick={() => assignMember(card)}>
+                        Assign
+                      </button>
+                      <button onClick={() => setDueDate(card)}>
+                        Due Date
+                      </button>
+                      <button
+                        className="danger"
+                        onClick={() => deleteCard(card.id)}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                ))}
               </div>
             ))}
-            {cards.filter(c => c.col === col).length === 0 && (
-              <div style={{ color: "#444", fontSize: "0.8rem", textAlign: "center", marginTop: "40px" }}>nothing queued</div>
-            )}
-          </div>
-        ))}
-      </div>
-
-      <div style={{ marginTop: "20px", fontSize: "0.7rem", color: "#444", textAlign: "center" }}>
-        FORGE 2 QUALIFIER · forge2-qualifier-anvitamishra123 · drag cards between columns
-      </div>
+          </main>
+        </>
+      )}
     </div>
   );
 }
+
+export default App;
